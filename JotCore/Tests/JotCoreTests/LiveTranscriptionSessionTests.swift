@@ -134,6 +134,32 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         XCTAssertEqual(kinds.dropFirst().first, "activityStart")
     }
 
+    func testSmallChunksCoalesceTo100msAndTailFlushesBeforeActivityEnd() async throws {
+        let transport = FakeTransport(script: [setupCompleteFrame(), finalFrame("coalesced")])
+        let session = makeSession(transport)
+        try await session.start()
+
+        // Enqueue 5 chunks of 800 bytes (4,000 bytes total):
+        // First 4 chunks (3,200 bytes) coalesce into one 100ms frame during streaming;
+        // the trailing 800 bytes flush on finish() right before activityEnd.
+        for _ in 0..<5 {
+            session.enqueue(Data(repeating: 0x07, count: 800))
+        }
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        let outcome = await session.finish(deadline: 2.0)
+        XCTAssertEqual(outcome, .completed("coalesced"))
+        let accepted = await session.acceptedBytes
+        XCTAssertEqual(accepted, 4_000, "every byte including the sub-100ms tail must be flushed and counted")
+
+        let audioFrames = transport.sentKinds.filter { $0 == "audio" }
+        XCTAssertEqual(audioFrames.count, 2, "5x800B buffers should coalesce into one 3,200B frame + one 800B tail flush")
+        let kinds = transport.sentKinds
+        let endIndex = try XCTUnwrap(kinds.firstIndex(of: "activityEnd"))
+        let lastAudioIndex = try XCTUnwrap(kinds.lastIndex(of: "audio"))
+        XCTAssertLessThan(lastAudioIndex, endIndex, "tail flush must precede activityEnd")
+    }
+
     // MARK: - Everything that must fall back
 
     /// The failure the whole design is arranged around: dropped audio yields a

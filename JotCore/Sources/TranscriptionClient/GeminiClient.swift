@@ -19,6 +19,7 @@ import Foundation
 public struct GeminiConfig: Sendable, Equatable {
     public var endpoint: URL
     public var transcribeModel: String
+    public var liveModel: String
     public var cleanupModel: String
 
     public init(
@@ -29,10 +30,12 @@ public struct GeminiConfig: Sendable, Equatable {
         // on 2026-08-18 was the -preview suffix; the graduated name is this
         // one.) A user can still pin something else in Settings → Advanced.
         transcribeModel: String = "gemini-3.5-transcribe",
+        liveModel: String = "gemini-3.5-transcribe-live",
         cleanupModel: String = "gemini-3.5-flash-lite"
     ) {
         self.endpoint = endpoint
         self.transcribeModel = transcribeModel
+        self.liveModel = liveModel
         self.cleanupModel = cleanupModel
     }
 

@@ -75,7 +75,7 @@ public actor LiveTranscriptionSession {
 
     /// Partials for the HUD. Separate from the outcome on purpose — nothing that
     /// arrives here is allowed to become the transcript.
-    public let partials: AsyncStream<String>
+    public nonisolated let partials: AsyncStream<String>
     private let partialSink: AsyncStream<String>.Continuation
 
     public init(transport: LiveTransport, setup: LiveSetup, ring: PCMRing = PCMRing()) {
@@ -156,9 +156,12 @@ public actor LiveTranscriptionSession {
     private func runSendLoop() async {
         for await command in commands {
             if closed { return }
-            // Drain the ring FIRST, on every command. This is what keeps
-            // activityEnd behind the audio it must not overtake.
-            for chunk in ring.drain() {
+            let isEnding: Bool
+            if case .endActivity = command { isEnding = true } else { isEnding = false }
+            // Coalesce into >=100ms (3,200-byte) frames during normal streaming,
+            // and flush every remaining byte before activityEnd so activityEnd
+            // never overtakes the audio in front of it.
+            for chunk in ring.drainCoalesced(flushAll: isEnding) {
                 do {
                     try await transport.send(LiveProtocol.audioFrame(chunk))
                     ring.markAccepted(chunk.count)
@@ -167,7 +170,7 @@ public actor LiveTranscriptionSession {
                     return
                 }
             }
-            if case .endActivity = command {
+            if isEnding {
                 do {
                     try await transport.send(LiveProtocol.activityEndFrame())
                 } catch {

@@ -39,6 +39,9 @@ public final class PCMRing: @unchecked Sendable {
 
     /// 16kHz mono Int16 = 32,000 bytes per second of audio.
     public static let bytesPerSecond = 32_000
+    /// ~100ms of 16kHz 16-bit mono PCM (3,200 bytes) — coalesces small HAL tap
+    /// buffers into ~10 frames/sec instead of flooding the WebSocket per wakeup.
+    public static let minSendBytes = 3_200
 
     private let capacityBytes: Int
     private var chunks: [Data] = []
@@ -83,11 +86,48 @@ public final class PCMRing: @unchecked Sendable {
     /// this; bytes are counted as accepted only once they have actually been
     /// handed to the socket, which is why `markAccepted` is separate.
     public func drain() -> [Data] {
+        drainCoalesced(minBytes: 1, flushAll: true)
+    }
+
+    /// Drains queued PCM into coalesced frames of at least `minBytes` (~100ms).
+    /// When `flushAll` is false, any trailing remainder smaller than `minBytes`
+    /// stays in the ring until more audio arrives or `endActivity` flushes with
+    /// `flushAll: true`.
+    public func drainCoalesced(minBytes: Int = PCMRing.minSendBytes, flushAll: Bool) -> [Data] {
         lock.lock()
         defer { lock.unlock() }
-        let out = chunks
-        chunks.removeAll(keepingCapacity: true)
-        queuedBytes = 0
+        guard !chunks.isEmpty else { return [] }
+        let threshold = max(1, minBytes)
+        if !flushAll, queuedBytes < threshold {
+            return []
+        }
+
+        var out: [Data] = []
+        var accumulator = Data()
+        accumulator.reserveCapacity(threshold)
+
+        while !chunks.isEmpty {
+            if !flushAll, accumulator.isEmpty, queuedBytes < threshold {
+                break
+            }
+            let next = chunks.removeFirst()
+            queuedBytes -= next.count
+            accumulator.append(next)
+            if accumulator.count >= threshold {
+                out.append(accumulator)
+                accumulator = Data()
+                accumulator.reserveCapacity(threshold)
+            }
+        }
+
+        if !accumulator.isEmpty {
+            if flushAll {
+                out.append(accumulator)
+            } else {
+                chunks.insert(accumulator, at: 0)
+                queuedBytes += accumulator.count
+            }
+        }
         return out
     }
 

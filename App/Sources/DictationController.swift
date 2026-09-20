@@ -69,9 +69,11 @@ final class DictationController {
         }
         guard let key = KeychainStore.loadAPIKey(), !key.isEmpty else { return nil }
         let dictionary = DictionaryStore()
+        let liveModel = settings.geminiConfig.liveModel
         let session = LiveTranscriptionSession(
             transport: WebSocketTransport(apiKey: { key }),
             setup: LiveSetup(
+                model: liveModel,
                 smart: settings.smartTranscriptionEnabled,
                 // The same terms the batch path biases with, so switching modes
                 // does not quietly change how someone's name gets spelled.
@@ -80,7 +82,7 @@ final class DictationController {
         )
         return LiveTranscriber(
             session: session,
-            modelID: "gemini-3.5-transcribe-live",
+            modelID: liveModel,
             replacementRules: { DictionaryStore().replacementRules() }
         )
     }

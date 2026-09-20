@@ -356,7 +356,7 @@ struct DictationPane: View {
                     Text("Live transcription is unavailable while the legacy transcription endpoint is on in Advanced.")
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Tone runs a second model over the transcript so email reads like email and chat like chat — it adds about half a second and sends the transcript text once more. Loud rooms judges your voice against the actual room noise instead of a fixed level. Live streams your voice as you speak instead of uploading at the end — if the connection stumbles it quietly falls back to the normal upload, so nothing is ever lost. All off by default.")
+                        Text("Live streams your voice over a WebSocket as you speak instead of uploading at the end (on by default) — if the connection stumbles it quietly falls back to the normal upload, so nothing is ever lost. Tone runs a second model over the transcript so email reads like email and chat like chat (adds about half a second). Loud rooms judges your voice against the actual room noise instead of a fixed level.")
                         // Live failing is invisible by design — it just looks like
                         // a slower dictation — so without this the question "is it
                         // actually working?" has no answer.
@@ -456,6 +456,7 @@ struct AdvancedPane: View {
     @State private var keyStatus: KeyStatus = KeychainStore.loadAPIKey() == nil ? .missing : .stored
     @State private var endpoint = SettingsStore().endpointOverride ?? ""
     @State private var transcribeModel = SettingsStore().transcribeModelOverride ?? ""
+    @State private var liveModel = SettingsStore().liveModelOverride ?? ""
     @State private var cleanupModel = SettingsStore().cleanupModelOverride ?? ""
 
     enum KeyStatus { case missing, stored, validating, valid, invalid, saveFailed, savedOffline }
@@ -529,6 +530,13 @@ struct AdvancedPane: View {
                     .onChange(of: transcribeModel) { _, value in
                         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                         settings.setTranscribeModelOverride(trimmed.isEmpty ? nil : trimmed)
+                    }
+                TextField("Live transcription model", text: $liveModel,
+                          prompt: Text(Self.defaultConfig.liveModel))
+                    .font(JotUI.TypeScale.code)
+                    .onChange(of: liveModel) { _, value in
+                        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        settings.setLiveModelOverride(trimmed.isEmpty ? nil : trimmed)
                     }
                 TextField("Formatting model", text: $cleanupModel,
                           prompt: Text(Self.defaultConfig.cleanupModel))
