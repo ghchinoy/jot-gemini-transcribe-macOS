@@ -49,7 +49,7 @@ public actor VertexAuthProvider {
             cached = refreshed
             return refreshed.accessToken
         }
-        if let cliToken = Self.tokenFromGcloudCLI() {
+        if let cliToken = await Self.tokenFromGcloudCLI() {
             let token = CachedToken(accessToken: cliToken, expiresAt: Date().addingTimeInterval(1_800))
             cached = token
             return token.accessToken
@@ -79,8 +79,7 @@ public actor VertexAuthProvider {
             .appendingPathComponent(".config/gcloud/application_default_credentials.json")
     }
 
-    /// Best-effort discovery of the user's default GCP project ID from local ADC or gcloud config.
-    public static func detectedProjectID() -> String? {
+    private static let cachedProjectID: String? = {
         if let envProject = ProcessInfo.processInfo.environment["GOOGLE_CLOUD_PROJECT"],
            !envProject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return envProject.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -102,6 +101,11 @@ public actor VertexAuthProvider {
             }
         }
         return nil
+    }()
+
+    /// Best-effort discovery of the user's default GCP project ID from local ADC or gcloud config.
+    public static func detectedProjectID() -> String? {
+        return cachedProjectID
     }
 
     private func refreshFromADCFile() async throws -> CachedToken? {
@@ -135,7 +139,7 @@ public actor VertexAuthProvider {
         return CachedToken(accessToken: token, expiresAt: Date().addingTimeInterval(expiresIn))
     }
 
-    private static func tokenFromGcloudCLI() -> String? {
+    private static func tokenFromGcloudCLI() async -> String? {
         let candidates = [
             "/opt/homebrew/bin/gcloud",
             "/usr/local/bin/gcloud",
@@ -144,21 +148,27 @@ public actor VertexAuthProvider {
         guard let binary = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             return nil
         }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = ["auth", "application-default", "print-access-token"]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            guard proc.terminationStatus == 0 else { return nil }
-            let out = pipe.fileHandleForReading.readDataToEndOfFile()
-            let token = String(data: out, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (token?.isEmpty == false) ? token : nil
-        } catch {
-            return nil
+        return await withCheckedContinuation { continuation in
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: binary)
+            proc.arguments = ["auth", "application-default", "print-access-token"]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = FileHandle.nullDevice
+            proc.terminationHandler = { process in
+                guard process.terminationStatus == 0 else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let out = pipe.fileHandleForReading.readDataToEndOfFile()
+                let token = String(data: out, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                continuation.resume(returning: (token?.isEmpty == false) ? token : nil)
+            }
+            do {
+                try proc.run()
+            } catch {
+                continuation.resume(returning: nil)
+            }
         }
     }
 }
