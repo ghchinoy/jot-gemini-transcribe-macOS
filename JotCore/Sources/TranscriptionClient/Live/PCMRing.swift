@@ -106,13 +106,14 @@ public final class PCMRing: @unchecked Sendable {
         var accumulator = Data()
         accumulator.reserveCapacity(threshold)
 
-        while !chunks.isEmpty {
+        var removedCount = 0
+        for next in chunks {
             if !flushAll, accumulator.isEmpty, queuedBytes < threshold {
                 break
             }
-            let next = chunks.removeFirst()
             queuedBytes -= next.count
             accumulator.append(next)
+            removedCount += 1
             if accumulator.count >= threshold {
                 out.append(accumulator)
                 accumulator = Data()
@@ -120,13 +121,10 @@ public final class PCMRing: @unchecked Sendable {
             }
         }
 
+        chunks.removeFirst(removedCount)
+
         if !accumulator.isEmpty {
-            if flushAll {
-                out.append(accumulator)
-            } else {
-                chunks.insert(accumulator, at: 0)
-                queuedBytes += accumulator.count
-            }
+            out.append(accumulator)
         }
         return out
     }
