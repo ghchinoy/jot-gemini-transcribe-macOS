@@ -156,8 +156,7 @@ public actor LiveTranscriptionSession {
     private func runSendLoop() async {
         for await command in commands {
             if closed { return }
-            let isEnding: Bool
-            if case .endActivity = command { isEnding = true } else { isEnding = false }
+            let isEnding = (command == .endActivity)
             // Coalesce into >=100ms (3,200-byte) frames during normal streaming,
             // and flush every remaining byte before activityEnd so activityEnd
             // never overtakes the audio in front of it.
