@@ -99,6 +99,7 @@ final class DictationController {
 
     init() {
         KeychainStore.migrateDevKeyFileIfPresent()
+        VertexAuthProvider.warmDetectedProjectID()
         let client = GeminiClient(apiKey: { KeychainStore.loadAPIKey() })
         let service = GeminiTranscriptionService(client: client)
         transcriptionService = service

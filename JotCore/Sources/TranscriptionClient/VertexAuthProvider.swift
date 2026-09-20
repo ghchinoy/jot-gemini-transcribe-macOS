@@ -38,6 +38,7 @@ public actor VertexAuthProvider {
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 10
         self.session = URLSession(configuration: config)
+        Self.warmDetectedProjectID()
     }
 
     /// Returns a valid OAuth2 access token, refreshing if missing or within 60s of expiry.
@@ -107,13 +108,21 @@ public actor VertexAuthProvider {
         return nil
     }()
 
+    /// Warms `cachedProjectID` asynchronously on a background utility queue so
+    /// subsequent UI reads on the MainActor hit the already-initialized static cache.
+    public static func warmDetectedProjectID() {
+        DispatchQueue.global(qos: .utility).async {
+            _ = cachedProjectID
+        }
+    }
+
     /// Best-effort discovery of the user's default GCP project ID from local ADC or gcloud config.
     public static func detectedProjectID() -> String? {
         return cachedProjectID
     }
 
     private func refreshFromADCFile() async throws -> CachedToken? {
-        guard let data = try? Data(contentsOf: Self.adcFileURL),
+        guard let data = await Task.detached(priority: .utility, operation: { try? Data(contentsOf: Self.adcFileURL) }).value,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let clientID = json["client_id"] as? String,
               let clientSecret = json["client_secret"] as? String,
@@ -159,7 +168,16 @@ public actor VertexAuthProvider {
             let pipe = Pipe()
             proc.standardOutput = pipe
             proc.standardError = FileHandle.nullDevice
+
+            let timeoutTask = Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if proc.isRunning {
+                    proc.terminate()
+                }
+            }
+
             proc.terminationHandler = { process in
+                timeoutTask.cancel()
                 guard process.terminationStatus == 0 else {
                     continuation.resume(returning: nil)
                     return
@@ -171,6 +189,7 @@ public actor VertexAuthProvider {
             do {
                 try proc.run()
             } catch {
+                timeoutTask.cancel()
                 continuation.resume(returning: nil)
             }
         }
