@@ -86,7 +86,12 @@ public final class PCMRing: @unchecked Sendable {
     /// this; bytes are counted as accepted only once they have actually been
     /// handed to the socket, which is why `markAccepted` is separate.
     public func drain() -> [Data] {
-        drainCoalesced(minBytes: 1, flushAll: true)
+        lock.lock()
+        defer { lock.unlock() }
+        let out = chunks
+        chunks.removeAll(keepingCapacity: true)
+        queuedBytes = 0
+        return out
     }
 
     /// Drains queued PCM into coalesced frames of at least `minBytes` (~100ms).
