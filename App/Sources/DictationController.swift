@@ -126,7 +126,7 @@ final class DictationController {
     }
 
     private var hasCredentials: Bool {
-        KeychainStore.loadAPIKey() != nil || SettingsStore().useVertexAI
+        KeychainStore.loadAPIKey() != nil || SettingsStore().geminiConfig.useVertexAI
     }
 
     private var needsOnboarding: Bool {

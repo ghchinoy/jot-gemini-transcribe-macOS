@@ -90,9 +90,13 @@ public actor VertexAuthProvider {
            !quotaProject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return quotaProject.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let defaultConfig = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/gcloud/configurations/config_default")
-        if let content = try? String(contentsOf: defaultConfig, encoding: .utf8) {
+        let gcloudDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/gcloud")
+        let activeConfigURL = gcloudDir.appendingPathComponent("active_config")
+        let activeConfig = (try? String(contentsOf: activeConfigURL, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let profileName = (activeConfig?.isEmpty == false) ? activeConfig! : "default"
+        let configURL = gcloudDir.appendingPathComponent("configurations/config_\(profileName)")
+        if let content = try? String(contentsOf: configURL, encoding: .utf8) {
             for line in content.components(separatedBy: .newlines) {
                 let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
                 if parts.count == 2, parts[0] == "project", !parts[1].isEmpty {
