@@ -65,6 +65,24 @@ public struct SettingsStore: Sendable {
 
     public var geminiConfig: GeminiConfig {
         var config = GeminiConfig()
+        let vertexEnabled = Self.defaults.bool(forKey: "useVertexAI")
+        let project = Self.defaults.string(forKey: "vertexProjectID")?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? VertexAuthProvider.detectedProjectID()
+            ?? ""
+        let location = Self.defaults.string(forKey: "vertexLocation")?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? "global"
+
+        config.useVertexAI = vertexEnabled && !project.isEmpty
+        config.vertexProjectID = project
+        config.vertexLocation = location.isEmpty ? "global" : location
+
+        if config.useVertexAI {
+            // Vertex AI still serves the -preview suffix for both batch and live
+            // transcription on locations/global (probed 2026-09-20).
+            config.transcribeModel = "gemini-3.5-transcribe-preview"
+            config.liveModel = "gemini-3.5-transcribe-live-preview"
+        }
+
         if let url = Self.usableEndpointURL(Self.defaults.string(forKey: "endpointOverride")) {
             config.endpoint = url
         }
@@ -78,6 +96,30 @@ public struct SettingsStore: Sendable {
             config.cleanupModel = model
         }
         return config
+    }
+
+    public var useVertexAI: Bool {
+        Self.defaults.bool(forKey: "useVertexAI")
+    }
+
+    public func setUseVertexAI(_ enabled: Bool) {
+        Self.set(enabled, forKey: "useVertexAI")
+    }
+
+    public var vertexProjectID: String? {
+        Self.defaults.string(forKey: "vertexProjectID")
+    }
+
+    public func setVertexProjectID(_ projectID: String?) {
+        Self.set(projectID, forKey: "vertexProjectID")
+    }
+
+    public var vertexLocation: String? {
+        Self.defaults.string(forKey: "vertexLocation")
+    }
+
+    public func setVertexLocation(_ location: String?) {
+        Self.set(location, forKey: "vertexLocation")
     }
 
     /// Double-tap the dictation key to lock hands-free. OFF by default: firm taps

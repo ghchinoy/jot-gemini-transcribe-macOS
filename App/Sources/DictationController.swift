@@ -67,13 +67,23 @@ final class DictationController {
             )
             return nil
         }
-        guard let key = KeychainStore.loadAPIKey(), !key.isEmpty else { return nil }
+        let config = settings.geminiConfig
         let dictionary = DictionaryStore()
-        let liveModel = settings.geminiConfig.liveModel
+        let liveModel = config.liveModel
+        let transport: WebSocketTransport
+        let setupModel: String
+        if config.useVertexAI {
+            transport = WebSocketTransport.vertex(projectID: config.vertexProjectID)
+            setupModel = config.vertexModelResourcePath(for: liveModel)
+        } else {
+            guard let key = KeychainStore.loadAPIKey(), !key.isEmpty else { return nil }
+            transport = WebSocketTransport(apiKey: { key })
+            setupModel = liveModel
+        }
         let session = LiveTranscriptionSession(
-            transport: WebSocketTransport(apiKey: { key }),
+            transport: transport,
             setup: LiveSetup(
-                model: liveModel,
+                model: setupModel,
                 smart: settings.smartTranscriptionEnabled,
                 // The same terms the batch path biases with, so switching modes
                 // does not quietly change how someone's name gets spelled.
@@ -115,10 +125,14 @@ final class DictationController {
         )
     }
 
+    private var hasCredentials: Bool {
+        KeychainStore.loadAPIKey() != nil || SettingsStore().useVertexAI
+    }
+
     private var needsOnboarding: Bool {
         // A deliberate "I'll add it later" is remembered — the wizard must not
         // re-trap that user every launch; the menu bar carries the key nudge.
-        (KeychainStore.loadAPIKey() == nil && !SettingsStore().hasCompletedOnboarding)
+        (!hasCredentials && !SettingsStore().hasCompletedOnboarding)
             || !AXIsProcessTrusted()
             || AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
     }
@@ -231,7 +245,7 @@ final class DictationController {
     private func activateEngine() {
         if engine.start() {
             engineActive = true
-            if KeychainStore.loadAPIKey() == nil {
+            if !hasCredentials {
                 // New-user path: dictation can't work yet — say exactly where to go.
                 onStatusChange?("Add your Gemini API key in Settings → Advanced")
                 onStatusItemState?(.attention)
@@ -320,7 +334,7 @@ final class DictationController {
             applyHotkeySettings()
             // The menu-bar status line names the key — keep it truthful, but
             // never overwrite an attention message ("Grant Accessibility…").
-            if engineActive, KeychainStore.loadAPIKey() != nil {
+            if engineActive, hasCredentials {
                 onStatusChange?("Ready — hold \(SettingsStore().hotkeyKey.displayName) to dictate")
             }
         case "accessibility":
@@ -328,8 +342,8 @@ final class DictationController {
             if !engineActive {
                 activateEngine()
             }
-        case "apiKey":
-            if KeychainStore.loadAPIKey() != nil {
+        case "apiKey", "useVertexAI", "vertexProjectID", "vertexLocation":
+            if hasCredentials {
                 // Covers the "I'll add it later" onboarding path, where the
                 // engine was never started: a key arriving in Settings must
                 // bring the whole app to life, not just flip a badge.

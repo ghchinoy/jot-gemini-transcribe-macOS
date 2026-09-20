@@ -135,6 +135,12 @@ public struct GeminiTranscriptionService: TranscriptionServicing {
         // The transport decision lives in ONE place so the fail-open retry below
         // cannot silently switch endpoints half way through a recovery.
         func send(_ terms: [String]) async throws -> String {
+            if config.useVertexAI {
+                return try await client.transcribeVertex(
+                    flacData: flacData, config: config,
+                    deadline: deadline, customVocabulary: terms
+                )
+            }
             if settings.usesLegacyTranscribeEndpoint {
                 // Verbatim only — `mode` returns an empty transcript on this
                 // endpoint. The tone pass, if enabled, still runs on top.
@@ -202,10 +208,17 @@ public struct GeminiTranscriptionService: TranscriptionServicing {
             spellings: dictionary.spellings()
         )
         do {
-            let response = try await client.cleanup(
-                prompt: prompt, model: config.cleanupModel,
-                endpoint: config.endpoint, deadline: Self.cleanupDeadline
-            )
+            let response: String
+            if config.useVertexAI {
+                response = try await client.cleanupVertex(
+                    prompt: prompt, config: config, deadline: Self.cleanupDeadline
+                )
+            } else {
+                response = try await client.cleanup(
+                    prompt: prompt, model: config.cleanupModel,
+                    endpoint: config.endpoint, deadline: Self.cleanupDeadline
+                )
+            }
             let cleaned = ValidationGate.stripArtifacts(response)
             let verdict = ValidationGate.validate(raw: raw, cleaned: cleaned)
             guard verdict.accepted else {

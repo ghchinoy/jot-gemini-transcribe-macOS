@@ -89,4 +89,70 @@ final class LiveModelSpikeProbeTests: XCTestCase {
             }
         }
     }
+
+    func testVertexAILiveSessionEndToEnd() async throws {
+        let env = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(env["JOT_LIVE_PROBE"] == "1", "Set JOT_LIVE_PROBE=1")
+        let pcmPath = try XCTUnwrap(env["JOT_PROBE_PCM"], "JOT_PROBE_PCM required")
+        let pcm = try Data(contentsOf: URL(fileURLWithPath: pcmPath))
+        let projectID = env["VERTEX_PROJECT_ID"] ?? VertexAuthProvider.detectedProjectID() ?? ""
+        try XCTSkipUnless(!projectID.isEmpty, "Set VERTEX_PROJECT_ID or configure gcloud default project")
+
+        let config = GeminiConfig(
+            transcribeModel: "gemini-3.5-transcribe-preview",
+            liveModel: "gemini-3.5-transcribe-live-preview",
+            useVertexAI: true,
+            vertexProjectID: projectID,
+            vertexLocation: "global"
+        )
+
+        let t0 = Date()
+        let transport = WebSocketTransport.vertex(projectID: projectID)
+        let setup = LiveSetup(
+            model: config.vertexModelResourcePath(for: config.liveModel),
+            smart: true,
+            customVocabulary: ["JotCore", "Chinoy"]
+        )
+        let session = LiveTranscriptionSession(transport: transport, setup: setup)
+
+        var observedPartials: [String] = []
+        let partialTask = Task {
+            for await p in session.partials {
+                observedPartials.append(p)
+            }
+        }
+
+        try await session.start(setupTimeout: 5.0)
+        let handshakeMs = Int(Date().timeIntervalSince(t0) * 1000)
+
+        let chunkSize = 800
+        var offset = 0
+        while offset < pcm.count {
+            let end = min(offset + chunkSize, pcm.count)
+            session.enqueue(pcm.subdata(in: offset..<end))
+            offset = end
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        let finishStart = Date()
+        let outcome = await session.finish(deadline: 6.0)
+        let finishMs = Int(Date().timeIntervalSince(finishStart) * 1000)
+        partialTask.cancel()
+
+        let accepted = await session.acceptedBytes
+        XCTAssertEqual(accepted, Int64(pcm.count), "every PCM byte must be accepted and reconciled")
+        print("""
+        [Vertex AI Live Probe] project=\(projectID):
+          - Handshake: \(handshakeMs)ms
+          - Post-audio finish latency: \(finishMs)ms
+          - Accepted bytes: \(accepted) / \(pcm.count)
+          - Partials count: \(observedPartials.count)
+          - Outcome: \(outcome)
+        """)
+        if case .completed(let text) = outcome {
+            XCTAssertFalse(text.isEmpty)
+        } else {
+            XCTFail("Expected .completed on Vertex AI, got \(outcome)")
+        }
+    }
 }

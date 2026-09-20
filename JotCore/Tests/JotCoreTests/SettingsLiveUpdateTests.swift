@@ -82,6 +82,42 @@ final class SettingsLiveUpdateTests: XCTestCase {
         settings.setSmartCleanupPass(true)
         XCTAssertEqual(settings.recordGateTrip(), 1)
     }
+
+    func testVertexAIConfigAndResourcePathResolution() throws {
+        let settings = SettingsStore()
+        defer {
+            settings.setUseVertexAI(false)
+            settings.setVertexProjectID(nil)
+            settings.setVertexLocation(nil)
+            settings.setLiveModelOverride(nil)
+            settings.setTranscribeModelOverride(nil)
+        }
+
+        settings.setUseVertexAI(true)
+        settings.setVertexProjectID("my-gcp-project")
+        settings.setVertexLocation("global")
+
+        let cfg = settings.geminiConfig
+        XCTAssertTrue(cfg.useVertexAI)
+        XCTAssertEqual(cfg.vertexProjectID, "my-gcp-project")
+        XCTAssertEqual(cfg.vertexLocation, "global")
+        XCTAssertEqual(cfg.transcribeModel, "gemini-3.5-transcribe-preview")
+        XCTAssertEqual(cfg.liveModel, "gemini-3.5-transcribe-live-preview")
+
+        let fullPath = cfg.vertexModelResourcePath(for: cfg.liveModel)
+        XCTAssertEqual(
+            fullPath,
+            "projects/my-gcp-project/locations/global/publishers/google/models/gemini-3.5-transcribe-live-preview"
+        )
+
+        let frame = LiveProtocol.setupFrame(LiveSetup(model: fullPath, smart: true))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+        let setupObj = try XCTUnwrap(json["setup"] as? [String: Any])
+        XCTAssertEqual(
+            setupObj["model"] as? String,
+            "projects/my-gcp-project/locations/global/publishers/google/models/gemini-3.5-transcribe-live-preview"
+        )
+    }
 }
 
 final class DictionaryImportTests: XCTestCase {

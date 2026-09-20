@@ -21,6 +21,9 @@ public struct GeminiConfig: Sendable, Equatable {
     public var transcribeModel: String
     public var liveModel: String
     public var cleanupModel: String
+    public var useVertexAI: Bool
+    public var vertexProjectID: String
+    public var vertexLocation: String
 
     public init(
         endpoint: URL = URL(string: "https://generativelanguage.googleapis.com")!,
@@ -31,14 +34,26 @@ public struct GeminiConfig: Sendable, Equatable {
         // one.) A user can still pin something else in Settings → Advanced.
         transcribeModel: String = "gemini-3.5-transcribe",
         liveModel: String = "gemini-3.5-transcribe-live",
-        cleanupModel: String = "gemini-3.5-flash-lite"
+        cleanupModel: String = "gemini-3.5-flash-lite",
+        useVertexAI: Bool = false,
+        vertexProjectID: String = "",
+        vertexLocation: String = "global"
     ) {
         self.endpoint = endpoint
         self.transcribeModel = transcribeModel
         self.liveModel = liveModel
         self.cleanupModel = cleanupModel
+        self.useVertexAI = useVertexAI
+        self.vertexProjectID = vertexProjectID
+        self.vertexLocation = vertexLocation
     }
 
+    public func vertexModelResourcePath(for model: String) -> String {
+        if model.hasPrefix("projects/") { return model }
+        let loc = vertexLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "global" : vertexLocation
+        let cleanModel = model.hasPrefix("models/") ? String(model.dropFirst("models/".count)) : model
+        return "projects/\(vertexProjectID)/locations/\(loc)/publishers/google/models/\(cleanModel)"
+    }
 }
 
 public extension GeminiClient {
@@ -62,13 +77,15 @@ public extension GeminiClient {
 public actor GeminiClient {
     private let session: URLSession
     private let apiKey: @Sendable () -> String?
+    private let vertexAuth: VertexAuthProvider
 
-    public init(apiKey: @escaping @Sendable () -> String?) {
+    public init(apiKey: @escaping @Sendable () -> String?, vertexAuth: VertexAuthProvider = .shared) {
         let config = URLSessionConfiguration.ephemeral
         config.waitsForConnectivity = false // fail fast into the retry/queue path
         config.timeoutIntervalForResource = 600
         self.session = URLSession(configuration: config)
         self.apiKey = apiKey
+        self.vertexAuth = vertexAuth
     }
 
     // MARK: - Calls
@@ -99,6 +116,37 @@ public actor GeminiClient {
         return try await generateContent(body: body, model: model, endpoint: endpoint, deadline: deadline)
     }
 
+    /// Vertex AI batch fallback (`POST https://aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`).
+    public func transcribeVertex(
+        flacData: Data, config: GeminiConfig, deadline: TimeInterval,
+        customVocabulary: [String] = []
+    ) async throws -> String {
+        let parts: [[String: Any]] = [
+            ["inlineData": ["mimeType": "audio/flac", "data": flacData.base64EncodedString()]],
+        ]
+        var audioConfig: [String: Any] = ["wordTimestamp": true, "diarization": false]
+        if !customVocabulary.isEmpty { audioConfig["customVocabulary"] = customVocabulary }
+        let body: [String: Any] = [
+            "contents": [["role": "user", "parts": parts]],
+            "generationConfig": [
+                "temperature": 0,
+                "audioTranscriptionConfig": audioConfig,
+            ],
+        ]
+        let headers = try await vertexAuth.headers(projectID: config.vertexProjectID)
+        let resourcePath = config.vertexModelResourcePath(for: config.transcribeModel)
+        let vertexRoot = URL(string: "https://aiplatform.googleapis.com")!
+        let data = try await post(
+            path: "v1/\(resourcePath):generateContent",
+            body: try JSONSerialization.data(withJSONObject: body),
+            endpoint: vertexRoot,
+            deadline: deadline,
+            modelLabel: config.transcribeModel,
+            customHeaders: headers
+        )
+        return try Self.extractText(from: data)
+    }
+
     /// Text-only cleanup call (flash-lite class, thinking minimized).
     /// The thinking knob differs by model generation (probed live):
     ///  - gemini-2.x: `thinkingConfig.thinkingBudget: 0`
@@ -120,6 +168,34 @@ public actor GeminiClient {
             ],
         ]
         return try await generateContent(body: body, model: model, endpoint: endpoint, deadline: deadline)
+    }
+
+    public func cleanupVertex(prompt: String, config: GeminiConfig, deadline: TimeInterval) async throws -> String {
+        let thinkingConfig: [String: Any] = config.cleanupModel.hasPrefix("gemini-2")
+            ? ["thinkingBudget": 0]
+            : ["thinkingLevel": "low"]
+        let body: [String: Any] = [
+            "contents": [[
+                "role": "user",
+                "parts": [["text": prompt]],
+            ]],
+            "generationConfig": [
+                "temperature": 0,
+                "thinkingConfig": thinkingConfig,
+            ],
+        ]
+        let headers = try await vertexAuth.headers(projectID: config.vertexProjectID)
+        let resourcePath = config.vertexModelResourcePath(for: config.cleanupModel)
+        let vertexRoot = URL(string: "https://aiplatform.googleapis.com")!
+        let data = try await post(
+            path: "v1/\(resourcePath):generateContent",
+            body: try JSONSerialization.data(withJSONObject: body),
+            endpoint: vertexRoot,
+            deadline: deadline,
+            modelLabel: config.cleanupModel,
+            customHeaders: headers
+        )
+        return try Self.extractText(from: data)
     }
 
     /// Cheap key validation for onboarding/Settings.
@@ -203,6 +279,7 @@ public actor GeminiClient {
         /// the wrong fix — especially since onboarding's preflight GETs the model
         /// resource and passes for exactly that user.
         modelIsInPath: Bool = true,
+        customHeaders: [String: String]? = nil,
         isRetryAfter429: Bool = false
     ) async throws -> Data {
         let url = endpoint.appendingPathComponent(path)
@@ -210,7 +287,13 @@ public actor GeminiClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = deadline
-        applyAuth(&request)
+        if let customHeaders {
+            for (k, v) in customHeaders {
+                request.setValue(v, forHTTPHeaderField: k)
+            }
+        } else {
+            applyAuth(&request)
+        }
         request.httpBody = body
 
         let data: Data
@@ -261,7 +344,8 @@ public actor GeminiClient {
                 Log.transcription.info("GeminiClient: 429 with retryDelay \(delay, format: .fixed(precision: 1))s — waiting once")
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 return try await post(path: path, body: body, endpoint: endpoint, deadline: deadline,
-                                      modelLabel: modelLabel, modelIsInPath: modelIsInPath, isRetryAfter429: true)
+                                      modelLabel: modelLabel, modelIsInPath: modelIsInPath,
+                                      customHeaders: customHeaders, isRetryAfter429: true)
             }
             // Only a real daily/hard quota is terminal; a per-minute throttle
             // (or an unparseable body) clears on its own and stays retryable.
@@ -440,6 +524,11 @@ public actor GeminiClient {
             throw TranscriptionError.safetyBlocked
         }
         let parts = (first["content"] as? [String: Any])?["parts"] as? [[String: Any]] ?? []
+        let audioTranscripts = parts.compactMap { ($0["audioTranscription"] as? [String: Any])?["text"] as? String }
+            .filter { !$0.isEmpty }
+        if !audioTranscripts.isEmpty {
+            return audioTranscripts.joined(separator: " ")
+        }
         let text = parts.compactMap { $0["text"] as? String }.joined()
         return text
     }

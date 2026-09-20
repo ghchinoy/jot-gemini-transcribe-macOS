@@ -28,14 +28,21 @@ public final class WebSocketTransport: LiveTransport, @unchecked Sendable {
 
     public static let endpoint =
         "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+    public static let vertexEndpoint =
+        "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 
-    private let apiKey: @Sendable () -> String
+    private let url: URL
+    private let headersProvider: @Sendable () async throws -> [String: String]
     private let session: URLSession
     private var task: URLSessionWebSocketTask?
     private let lock = NSLock()
 
-    public init(apiKey: @escaping @Sendable () -> String) {
-        self.apiKey = apiKey
+    public init(
+        url: URL = URL(string: WebSocketTransport.endpoint)!,
+        headersProvider: @escaping @Sendable () async throws -> [String: String]
+    ) {
+        self.url = url
+        self.headersProvider = headersProvider
         let config = URLSessionConfiguration.ephemeral
         // Fail fast rather than parking. `waitsForConnectivity` would leave an
         // offline dictation holding an unresolved connection for its whole
@@ -46,9 +53,29 @@ public final class WebSocketTransport: LiveTransport, @unchecked Sendable {
         self.session = URLSession(configuration: config)
     }
 
+    public convenience init(apiKey: @escaping @Sendable () -> String) {
+        self.init(
+            url: URL(string: Self.endpoint)!,
+            headersProvider: { ["x-goog-api-key": apiKey()] }
+        )
+    }
+
+    public static func vertex(
+        projectID: String,
+        auth: VertexAuthProvider = .shared
+    ) -> WebSocketTransport {
+        WebSocketTransport(
+            url: URL(string: Self.vertexEndpoint)!,
+            headersProvider: { try await auth.headers(projectID: projectID) }
+        )
+    }
+
     public func connect() async throws {
-        var request = URLRequest(url: URL(string: Self.endpoint)!)
-        request.setValue(apiKey(), forHTTPHeaderField: "x-goog-api-key")
+        var request = URLRequest(url: url)
+        let headers = try await headersProvider()
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         let task = session.webSocketTask(with: request)
         lock.lock(); self.task = task; lock.unlock()
         task.resume()

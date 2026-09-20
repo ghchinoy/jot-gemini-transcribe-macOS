@@ -73,9 +73,15 @@ public enum LiveProtocol {
         if !setup.customVocabulary.isEmpty {
             transcription["customVocabulary"] = setup.customVocabulary
         }
+        let modelResource: String
+        if setup.model.hasPrefix("projects/") || setup.model.hasPrefix("models/") {
+            modelResource = setup.model
+        } else {
+            modelResource = "models/\(setup.model)"
+        }
         let frame: [String: Any] = [
             "setup": [
-                "model": "models/\(setup.model)",
+                "model": modelResource,
                 "generationConfig": ["responseModalities": ["TEXT"]],
                 "inputAudioTranscription": transcription,
                 "realtimeInputConfig": [

@@ -454,6 +454,9 @@ struct AdvancedPane: View {
     private static let defaultConfig = GeminiConfig()
     @State private var apiKey = ""
     @State private var keyStatus: KeyStatus = KeychainStore.loadAPIKey() == nil ? .missing : .stored
+    @State private var useVertexAI = SettingsStore().useVertexAI
+    @State private var vertexProjectID = SettingsStore().vertexProjectID ?? ""
+    @State private var vertexLocation = SettingsStore().vertexLocation ?? ""
     @State private var endpoint = SettingsStore().endpointOverride ?? ""
     @State private var transcribeModel = SettingsStore().transcribeModelOverride ?? ""
     @State private var liveModel = SettingsStore().liveModelOverride ?? ""
@@ -512,6 +515,33 @@ struct AdvancedPane: View {
             }
 
             Section {
+                Toggle("Use Vertex AI (Google Cloud ADC)", isOn: $useVertexAI)
+                    .onChange(of: useVertexAI) { _, enabled in
+                        settings.setUseVertexAI(enabled)
+                    }
+                if useVertexAI {
+                    TextField("Project ID", text: $vertexProjectID,
+                              prompt: Text(VertexAuthProvider.detectedProjectID() ?? "your-gcp-project-id"))
+                        .font(JotUI.TypeScale.code)
+                        .onChange(of: vertexProjectID) { _, value in
+                            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                            settings.setVertexProjectID(trimmed.isEmpty ? nil : trimmed)
+                        }
+                    TextField("Location", text: $vertexLocation,
+                              prompt: Text(Self.defaultConfig.vertexLocation))
+                        .font(JotUI.TypeScale.code)
+                        .onChange(of: vertexLocation) { _, value in
+                            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                            settings.setVertexLocation(trimmed.isEmpty ? nil : trimmed)
+                        }
+                }
+            } header: {
+                Text("Vertex AI")
+            } footer: {
+                Text("Routes live and batch transcription through aiplatform.googleapis.com using local Google Cloud Application Default Credentials (`gcloud auth application-default login`) instead of an AI Studio API key.")
+            }
+
+            Section {
                 TextField("Endpoint", text: $endpoint,
                           prompt: Text(Self.defaultConfig.endpoint.absoluteString))
                     .font(JotUI.TypeScale.code)
@@ -525,14 +555,14 @@ struct AdvancedPane: View {
                         .foregroundStyle(JotUI.Colors.error)
                 }
                 TextField("Transcription model", text: $transcribeModel,
-                          prompt: Text(Self.defaultConfig.transcribeModel))
+                          prompt: Text(useVertexAI ? "gemini-3.5-transcribe-preview" : Self.defaultConfig.transcribeModel))
                     .font(JotUI.TypeScale.code)
                     .onChange(of: transcribeModel) { _, value in
                         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                         settings.setTranscribeModelOverride(trimmed.isEmpty ? nil : trimmed)
                     }
                 TextField("Live transcription model", text: $liveModel,
-                          prompt: Text(Self.defaultConfig.liveModel))
+                          prompt: Text(useVertexAI ? "gemini-3.5-transcribe-live-preview" : Self.defaultConfig.liveModel))
                     .font(JotUI.TypeScale.code)
                     .onChange(of: liveModel) { _, value in
                         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
